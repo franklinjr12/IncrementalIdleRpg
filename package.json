@@ -1,0 +1,28 @@
+{
+  "name": "phaserincremental",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "android:sync": "npm run build && npx cap sync android",
+    "android:open": "npx cap open android",
+    "docker:android": "powershell -ExecutionPolicy Bypass -File scripts/build-android-docker.ps1",
+    "docker:android:release": "powershell -ExecutionPolicy Bypass -File scripts/build-android-docker.ps1 -BuildType Release"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@capacitor/android": "^8.3.4",
+    "@capacitor/cli": "^8.3.4",
+    "@capacitor/core": "^8.3.4",
+    "phaser": "^4.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16"
+  }
+}

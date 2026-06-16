@@ -1,0 +1,26 @@
+[
+  {
+    "id": "slime_field", "name": "Green Slime Field", "level": "1-10", "unlockLevel": 1,
+    "theme": "Safe beginner field", "element": "earth", "color": 2571336,
+    "drops": "Slime Jelly, beginner weapons, Slime Card", "mvpThreshold": 25, "mvp": "king_slime",
+    "monsters": ["slime", "tiny_blob", "forest_worm", "grass_imp"]
+  },
+  {
+    "id": "forest_path", "name": "Forest Path", "level": "8-18", "unlockLevel": 8,
+    "theme": "Fast EXP and early equipment", "element": "earth", "color": 2053698,
+    "drops": "Wolf Fang, Leather Armor, Hunter Bow", "mvpThreshold": 40, "mvp": "ancient_wolf",
+    "monsters": ["wolf_pup", "beetle", "sporeling", "wild_plant"]
+  },
+  {
+    "id": "cave_entrance", "name": "Cave Entrance", "level": "15-28", "unlockLevel": 15,
+    "theme": "Accuracy and sustain check", "element": "neutral", "color": 3425877,
+    "drops": "Iron Ore, Cave Boots, Goblin Card", "mvpThreshold": 60, "mvp": "goblin_chief",
+    "monsters": ["cave_bat", "goblin_miner", "stone_bug", "mushroom_beast"]
+  },
+  {
+    "id": "desert_outskirts", "name": "Desert Outskirts", "level": "25-40", "unlockLevel": 25,
+    "theme": "Element and defense check", "element": "fire", "color": 7812101,
+    "drops": "Fire Fragment, Desert Robe, rare cards", "mvpThreshold": 80, "mvp": "scorpion_queen",
+    "monsters": ["sand_scorpion", "fire_imp", "dust_golem", "desert_bandit"]
+  }
+]

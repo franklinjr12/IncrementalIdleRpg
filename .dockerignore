@@ -1,0 +1,9 @@
+android/.gradle
+android/app/build
+android/build
+dist
+node_modules
+npm-debug.log*
+vite-dev*.log
+.git
+.gitignore

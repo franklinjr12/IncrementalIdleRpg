@@ -1,0 +1,38 @@
+[
+  {
+    "id": "warrior",
+    "name": "Warrior",
+    "color": 13519445,
+    "description": "A durable melee fighter with steady damage and strong recovery.",
+    "mainStats": "STR, VIT, AGI",
+    "strength": "Safe farming and boss endurance",
+    "weakness": "Lower burst and magic defense",
+    "starterMap": "Green Slime Field",
+    "startingWeapon": "rusty_sword",
+    "stats": { "str": 8, "agi": 5, "vit": 8, "int": 2, "dex": 5, "luk": 2 }
+  },
+  {
+    "id": "ranger",
+    "name": "Ranger",
+    "color": 5684338,
+    "description": "A fast ranged farmer built around accuracy, evasion, and critical hits.",
+    "mainStats": "DEX, AGI, LUK",
+    "strength": "Fast kills, high accuracy, better drops",
+    "weakness": "Low HP when attacks connect",
+    "starterMap": "Green Slime Field",
+    "startingWeapon": "training_bow",
+    "stats": { "str": 3, "agi": 8, "vit": 4, "int": 3, "dex": 9, "luk": 5 }
+  },
+  {
+    "id": "mage",
+    "name": "Mage",
+    "color": 10688511,
+    "description": "An elemental caster with high burst damage and a limited SP pool.",
+    "mainStats": "INT, DEX, VIT",
+    "strength": "Elemental damage and powerful skills",
+    "weakness": "SP management and physical defense",
+    "starterMap": "Green Slime Field",
+    "startingWeapon": "apprentice_staff",
+    "stats": { "str": 2, "agi": 4, "vit": 5, "int": 10, "dex": 7, "luk": 3 }
+  }
+]
