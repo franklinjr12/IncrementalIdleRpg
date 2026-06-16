@@ -61,6 +61,12 @@ import { getOfflineCapHours } from '../game/OfflineProgress';
 type ViewId = 'battle' | 'character' | 'maps' | 'inventory' | 'skills' | 'market' | 'upgrade' | 'report';
 type MapTab = 'enemies' | 'drops' | 'estimate' | 'compare' | 'target';
 
+const INVENTORY_VISIBLE_ITEMS = 7;
+const INVENTORY_ITEM_HEIGHT = 58;
+const INVENTORY_LIST_X = 20;
+const INVENTORY_LIST_Y = 364;
+const INVENTORY_LIST_WIDTH = 332;
+
 const COLORS = {
   background: 0x0d1320,
   panel: 0x182235,
@@ -90,6 +96,7 @@ export class MainScene extends Phaser.Scene {
   private selectedMarketCategory: MarketCategory = 'potion';
   private compareMapIds: string[] = ['slime_field', 'forest_path'];
   private targetIndex = 0;
+  private inventoryScrollIndex = 0;
 
   constructor() {
     super('MainScene');
@@ -107,6 +114,12 @@ export class MainScene extends Phaser.Scene {
     this.selectedMapId = this.state.currentMapId;
     this.cameras.main.setBackgroundColor(COLORS.background);
     this.root = this.add.container(0, 0);
+    this.input.on('wheel', (pointer: Phaser.Input.Pointer, _gameObjects: Phaser.GameObjects.GameObject[], _deltaX: number, deltaY: number) => {
+      if (this.view !== 'inventory') return;
+      const inBag = pointer.x >= INVENTORY_LIST_X && pointer.x <= INVENTORY_LIST_X + INVENTORY_LIST_WIDTH
+        && pointer.y >= 326 && pointer.y <= INVENTORY_LIST_Y + INVENTORY_VISIBLE_ITEMS * INVENTORY_ITEM_HEIGHT;
+      if (inBag) this.scrollInventory(deltaY > 0 ? 1 : -1);
+    });
     this.render();
 
     window.addEventListener('beforeunload', () => saveGame(this.state));
@@ -317,12 +330,25 @@ export class MainScene extends Phaser.Scene {
       this.text(x + 88, y, item ? `${item.name} +${instance!.upgradeLevel}` : 'Empty', 13, item ? this.rarityColor(item.rarity) : '#65758b', 'left', Boolean(item));
     });
 
-    const items = this.sortedInventory().slice(0, 7);
+    const sortedItems = this.sortedInventory();
+    this.clampInventoryScroll(sortedItems);
+    const items = sortedItems.slice(this.inventoryScrollIndex, this.inventoryScrollIndex + INVENTORY_VISIBLE_ITEMS);
     if (!this.selectedInventoryUid && items[0]) this.selectedInventoryUid = items[0].uid;
     this.text(28, 326, 'Bag', 22, COLORS.text, 'left', true);
+    this.text(238, 332, `${Math.min(this.inventoryScrollIndex + 1, sortedItems.length)}-${Math.min(this.inventoryScrollIndex + INVENTORY_VISIBLE_ITEMS, sortedItems.length)} / ${sortedItems.length}`, 12, COLORS.muted, 'right');
+    if (sortedItems.length > INVENTORY_VISIBLE_ITEMS) {
+      this.button(246, 324, 50, 28, 'Up', () => this.scrollInventory(-1), this.inventoryScrollIndex > 0 ? COLORS.panelAlt : COLORS.panel);
+      this.button(302, 324, 50, 28, 'Down', () => this.scrollInventory(1), this.inventoryScrollIndex < sortedItems.length - INVENTORY_VISIBLE_ITEMS ? COLORS.panelAlt : COLORS.panel);
+      const trackHeight = INVENTORY_VISIBLE_ITEMS * INVENTORY_ITEM_HEIGHT - 10;
+      const thumbHeight = Math.max(32, trackHeight * (INVENTORY_VISIBLE_ITEMS / sortedItems.length));
+      const thumbY = INVENTORY_LIST_Y + 5 + (trackHeight - thumbHeight) * (this.inventoryScrollIndex / (sortedItems.length - INVENTORY_VISIBLE_ITEMS));
+      this.panel(356, INVENTORY_LIST_Y, 8, INVENTORY_VISIBLE_ITEMS * INVENTORY_ITEM_HEIGHT, COLORS.border);
+      const thumb = this.add.rectangle(357, thumbY, 6, thumbHeight, COLORS.gold, 0.85).setOrigin(0);
+      this.root?.add(thumb);
+    }
     items.forEach((instance, index) => {
       const item = getInstanceItem(instance);
-      const y = 364 + index * 58;
+      const y = INVENTORY_LIST_Y + index * INVENTORY_ITEM_HEIGHT;
       const selected = instance.uid === this.selectedInventoryUid;
       const equipped = Object.values(this.state.equipment).includes(instance.uid);
       this.panel(20, y, 332, 48, selected ? COLORS.blue : COLORS.panel);
@@ -382,8 +408,16 @@ export class MainScene extends Phaser.Scene {
       this.render();
     }, instance.locked ? COLORS.purple : COLORS.panelAlt);
     this.button(x + 190, y + height - 50, 82, 36, 'Sell', () => {
+      const beforeSellItems = this.sortedInventory();
+      const soldIndex = beforeSellItems.findIndex((entry) => entry.uid === instance.uid);
       if (sellItem(this.state, instance.uid)) {
-        this.selectedInventoryUid = null;
+        const afterSellItems = this.sortedInventory();
+        this.selectedInventoryUid = afterSellItems[Math.min(soldIndex, afterSellItems.length - 1)]?.uid ?? null;
+        if (this.selectedInventoryUid) {
+          const selectedIndex = afterSellItems.findIndex((entry) => entry.uid === this.selectedInventoryUid);
+          this.scrollInventoryToInclude(selectedIndex);
+        }
+        this.clampInventoryScroll(afterSellItems);
         saveGame(this.state);
         this.render();
       }
@@ -832,6 +866,26 @@ export class MainScene extends Phaser.Scene {
 
   private sortedInventoryForUpgrade(): EquipmentInstance[] {
     return [...this.state.inventory].sort((a, b) => Number(Object.values(this.state.equipment).includes(b.uid)) - Number(Object.values(this.state.equipment).includes(a.uid)) || b.upgradeLevel - a.upgradeLevel || effectiveItemScore(b) - effectiveItemScore(a));
+  }
+
+  private scrollInventory(direction: number): void {
+    const items = this.sortedInventory();
+    this.inventoryScrollIndex += direction;
+    this.clampInventoryScroll(items);
+    this.render();
+  }
+
+  private clampInventoryScroll(items = this.sortedInventory()): void {
+    const maxScrollIndex = Math.max(0, items.length - INVENTORY_VISIBLE_ITEMS);
+    this.inventoryScrollIndex = Phaser.Math.Clamp(this.inventoryScrollIndex, 0, maxScrollIndex);
+  }
+
+  private scrollInventoryToInclude(index: number): void {
+    if (index < 0) return;
+    if (index < this.inventoryScrollIndex) this.inventoryScrollIndex = index;
+    if (index >= this.inventoryScrollIndex + INVENTORY_VISIBLE_ITEMS) {
+      this.inventoryScrollIndex = index - INVENTORY_VISIBLE_ITEMS + 1;
+    }
   }
 
   private equippedForSlot(slot: EquipmentSlot): EquipmentInstance | null {
