@@ -7,7 +7,6 @@ import {
   MAP_BY_ID,
   MONSTER_BY_ID,
   SKILLS,
-  createCharacter,
   createInitialState,
   createSession,
   type AttributeKey,
@@ -55,10 +54,20 @@ import {
   sellItem,
   spendStatPoint
 } from '../game/Economy';
-import { loadGame, saveGame } from '../game/SaveSystem';
+import {
+  createSave,
+  deleteSave,
+  getActiveSaveId,
+  listSaves,
+  loadSave,
+  migrateLegacySaveIfNeeded,
+  saveGame,
+  type SaveMetadata
+} from '../game/SaveSystem';
 import { getOfflineCapHours } from '../game/OfflineProgress';
 
 type ViewId = 'battle' | 'character' | 'maps' | 'inventory' | 'skills' | 'market' | 'upgrade' | 'report';
+type ScreenMode = 'saves' | 'new' | 'game';
 type MapTab = 'enemies' | 'drops' | 'estimate' | 'compare' | 'target';
 
 const INVENTORY_VISIBLE_ITEMS = 7;
@@ -66,6 +75,7 @@ const INVENTORY_ITEM_HEIGHT = 58;
 const INVENTORY_LIST_X = 20;
 const INVENTORY_LIST_Y = 364;
 const INVENTORY_LIST_WIDTH = 332;
+const SAVES_VISIBLE_ITEMS = 6;
 
 const COLORS = {
   background: 0x0d1320,
@@ -84,11 +94,16 @@ const COLORS = {
 export class MainScene extends Phaser.Scene {
   private state: GameState = createInitialState();
   private root?: Phaser.GameObjects.Container;
+  private screenMode: ScreenMode = 'saves';
   private view: ViewId = 'battle';
   private mapTab: MapTab = 'enemies';
   private redrawTimer = 0;
   private saveTimer = 0;
   private offlineReport: SessionReport | null = null;
+  private saves: SaveMetadata[] = [];
+  private saveScrollIndex = 0;
+  private pendingDeleteSaveId: string | null = null;
+  private newCharacterName = 'Adventurer';
   private selectedInventoryUid: string | null = null;
   private selectedUpgradeUid: string | null = null;
   private selectedSkillId: string | null = null;
@@ -103,32 +118,32 @@ export class MainScene extends Phaser.Scene {
   }
 
   create(): void {
-    const loaded = loadGame();
-    if (loaded) {
-      this.state = loaded.state;
-      this.offlineReport = loaded.offlineReport;
-      if (loaded.offlineReport) this.view = 'report';
-    }
-    normalizeMarketStock(this.state);
-    normalizeSkillLoadout(this.state);
-    this.selectedMapId = this.state.currentMapId;
+    migrateLegacySaveIfNeeded();
+    this.refreshSaveList();
     this.cameras.main.setBackgroundColor(COLORS.background);
     this.root = this.add.container(0, 0);
     this.input.on('wheel', (pointer: Phaser.Input.Pointer, _gameObjects: Phaser.GameObjects.GameObject[], _deltaX: number, deltaY: number) => {
+      if (this.screenMode === 'saves') {
+        const inSaves = pointer.x >= 20 && pointer.x <= 700 && pointer.y >= 226 && pointer.y <= 226 + SAVES_VISIBLE_ITEMS * 132;
+        if (inSaves) this.scrollSaves(deltaY > 0 ? 1 : -1);
+        return;
+      }
       if (this.view !== 'inventory') return;
       const inBag = pointer.x >= INVENTORY_LIST_X && pointer.x <= INVENTORY_LIST_X + INVENTORY_LIST_WIDTH
         && pointer.y >= 326 && pointer.y <= INVENTORY_LIST_Y + INVENTORY_VISIBLE_ITEMS * INVENTORY_ITEM_HEIGHT;
       if (inBag) this.scrollInventory(deltaY > 0 ? 1 : -1);
     });
+    this.input.keyboard?.on('keydown', (event: KeyboardEvent) => this.handleNameKey(event));
     this.render();
 
-    window.addEventListener('beforeunload', () => saveGame(this.state));
+    window.addEventListener('beforeunload', () => this.saveActiveGame());
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) saveGame(this.state);
+      if (document.hidden) this.saveActiveGame();
     });
   }
 
   update(_time: number, delta: number): void {
+    if (this.screenMode !== 'game') return;
     if (this.state.farming) {
       advanceCombat(this.state, delta / 1000);
       refreshSessionRates(this.state);
@@ -147,8 +162,17 @@ export class MainScene extends Phaser.Scene {
 
   private render(): void {
     this.root?.removeAll(true);
-    if (!this.state.character) {
+    if (this.screenMode === 'saves') {
+      this.renderSaveSelection();
+      return;
+    }
+    if (this.screenMode === 'new') {
       this.renderClassSelection();
+      return;
+    }
+    if (!this.state.character) {
+      this.screenMode = 'saves';
+      this.renderSaveSelection();
       return;
     }
 
@@ -164,13 +188,58 @@ export class MainScene extends Phaser.Scene {
     this.renderNavigation();
   }
 
+  private renderSaveSelection(): void {
+    this.refreshSaveList();
+    this.text(360, 62, 'IDLE REALMS', 38, COLORS.gold, 'center', true);
+    this.text(360, 108, 'Choose a character save', 22, COLORS.text, 'center');
+    this.text(360, 142, 'Continue an adventurer or begin a new one.', 15, COLORS.muted, 'center');
+    this.button(240, 170, 240, 52, 'New Character', () => this.beginNewCharacter(), COLORS.green);
+
+    if (this.saves.length === 0) {
+      this.panel(40, 270, 640, 300, COLORS.blue);
+      this.text(360, 358, 'No character saves yet', 26, COLORS.text, 'center', true);
+      this.text(360, 414, 'Create a character to start farming.', 17, COLORS.muted, 'center');
+      return;
+    }
+
+    this.clampSaveScroll();
+    const visible = this.saves.slice(this.saveScrollIndex, this.saveScrollIndex + SAVES_VISIBLE_ITEMS);
+    visible.forEach((save, index) => {
+      const y = 226 + index * 132;
+      const definition = CLASS_BY_ID[save.classId];
+      const map = MAP_BY_ID[save.currentMapId];
+      const pendingDelete = this.pendingDeleteSaveId === save.id;
+      this.panel(20, y, 680, 112, pendingDelete ? COLORS.red : definition.color);
+      this.box(42, y + 18, 74, 74, definition.color, definition.name.toUpperCase());
+      this.text(136, y + 14, save.name, 22, COLORS.text, 'left', true, 300);
+      this.text(136, y + 46, `${definition.name}  |  Base ${save.level}  Job ${save.jobLevel}`, 14, COLORS.gold);
+      this.text(136, y + 73, `${Math.floor(save.gold).toLocaleString()} G  |  ${map?.name ?? save.currentMapId}  |  ${this.relativeTime(save.lastSavedAt)}`, 13, COLORS.muted, 'left', false, 360);
+      this.button(508, y + 18, 76, 74, 'Play', () => this.playSave(save.id), COLORS.green);
+      this.button(598, y + 18, 78, 74, pendingDelete ? 'Confirm' : 'Delete', () => this.deleteSaveWithConfirmation(save.id), pendingDelete ? COLORS.red : COLORS.panelAlt);
+    });
+
+    if (this.saves.length > SAVES_VISIBLE_ITEMS) {
+      this.text(360, 1032, `${this.saveScrollIndex + 1}-${Math.min(this.saveScrollIndex + SAVES_VISIBLE_ITEMS, this.saves.length)} / ${this.saves.length}`, 14, COLORS.muted, 'center');
+      this.button(224, 1062, 124, 44, 'Up', () => this.scrollSaves(-1), this.saveScrollIndex > 0 ? COLORS.panelAlt : COLORS.panel);
+      this.button(372, 1062, 124, 44, 'Down', () => this.scrollSaves(1), this.saveScrollIndex < this.saves.length - SAVES_VISIBLE_ITEMS ? COLORS.panelAlt : COLORS.panel);
+    }
+  }
+
   private renderClassSelection(): void {
     this.text(360, 62, 'IDLE REALMS', 38, COLORS.gold, 'center', true);
-    this.text(360, 108, 'Choose your first class', 22, COLORS.text, 'center');
-    this.text(360, 142, 'Your choice sets stats, weapon, skills, and farming identity.', 15, COLORS.muted, 'center');
+    this.text(360, 108, 'Create a new character', 22, COLORS.text, 'center');
+    this.text(360, 142, 'Name your adventurer, then choose a class.', 15, COLORS.muted, 'center');
+    this.panel(80, 166, 560, 62, COLORS.blue);
+    this.text(104, 184, 'Name', 14, COLORS.gold, 'left', true);
+    this.text(186, 181, `${this.newCharacterName}_`, 20, COLORS.text, 'left', true, 360);
+    this.button(534, 176, 82, 42, 'Back', () => {
+      this.screenMode = 'saves';
+      this.pendingDeleteSaveId = null;
+      this.render();
+    }, COLORS.panelAlt);
 
     CLASSES.forEach((definition, index) => {
-      const y = 208 + index * 300;
+      const y = 258 + index * 276;
       this.panel(28, y, 664, 268, definition.color);
       this.box(74, y + 48, 112, 112, definition.color, definition.name.toUpperCase());
       this.text(212, y + 34, definition.name, 28, COLORS.text, 'left', true);
@@ -185,10 +254,16 @@ export class MainScene extends Phaser.Scene {
   }
 
   private chooseClass(classId: ClassId): void {
-    this.state = createCharacter(classId);
+    this.state = createSave(classId, this.newCharacterName);
     const stats = getDerivedStats(this.state);
     this.state.character!.hp = stats.maxHp;
     this.state.character!.sp = stats.maxSp;
+    this.screenMode = 'game';
+    this.view = 'battle';
+    this.offlineReport = null;
+    normalizeMarketStock(this.state);
+    normalizeSkillLoadout(this.state);
+    this.selectedMapId = this.state.currentMapId;
     this.selectedInventoryUid = this.state.equipment.weapon;
     this.selectedUpgradeUid = this.state.equipment.weapon;
     saveGame(this.state);
@@ -201,8 +276,9 @@ export class MainScene extends Phaser.Scene {
     this.panel(0, 0, 720, 76, definition.color);
     this.text(20, 14, `${character.name}  |  ${definition.name}`, 21, COLORS.text, 'left', true);
     this.text(20, 43, `Base ${character.level}  Job ${character.jobLevel}`, 15, COLORS.muted);
-    this.text(700, 18, `${Math.floor(this.state.gold).toLocaleString()} G`, 19, COLORS.gold, 'right', true);
-    this.text(700, 45, this.state.farming ? 'AUTO-FARMING' : 'IN TOWN', 13, this.state.farming ? '#83e6ad' : COLORS.muted, 'right', true);
+    this.text(592, 18, `${Math.floor(this.state.gold).toLocaleString()} G`, 19, COLORS.gold, 'right', true);
+    this.text(592, 45, this.state.farming ? 'AUTO-FARMING' : 'IN TOWN', 13, this.state.farming ? '#83e6ad' : COLORS.muted, 'right', true);
+    this.button(612, 18, 86, 40, 'Saves', () => this.returnToSaves(), COLORS.panelAlt);
   }
 
   private renderBattle(): void {
@@ -860,6 +936,97 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
+  private refreshSaveList(): void {
+    this.saves = listSaves();
+    this.clampSaveScroll();
+  }
+
+  private beginNewCharacter(): void {
+    this.saveActiveGame();
+    this.state = createInitialState();
+    this.newCharacterName = 'Adventurer';
+    this.pendingDeleteSaveId = null;
+    this.screenMode = 'new';
+    this.render();
+  }
+
+  private playSave(saveId: string): void {
+    this.saveActiveGame();
+    const loaded = loadSave(saveId);
+    if (!loaded) {
+      this.refreshSaveList();
+      this.render();
+      return;
+    }
+    this.state = loaded.state;
+    this.offlineReport = loaded.offlineReport;
+    this.screenMode = 'game';
+    this.view = loaded.offlineReport ? 'report' : 'battle';
+    this.pendingDeleteSaveId = null;
+    this.selectedMapId = this.state.currentMapId;
+    this.selectedInventoryUid = this.state.equipment.weapon;
+    this.selectedUpgradeUid = this.state.equipment.weapon;
+    this.selectedSkillId = null;
+    this.inventoryScrollIndex = 0;
+    normalizeMarketStock(this.state);
+    normalizeSkillLoadout(this.state);
+    this.render();
+  }
+
+  private deleteSaveWithConfirmation(saveId: string): void {
+    if (this.pendingDeleteSaveId !== saveId) {
+      this.pendingDeleteSaveId = saveId;
+      this.render();
+      return;
+    }
+    const deletedActiveSave = getActiveSaveId() === saveId;
+    deleteSave(saveId);
+    if (deletedActiveSave) {
+      this.state = createInitialState();
+    }
+    this.pendingDeleteSaveId = null;
+    this.refreshSaveList();
+    this.render();
+  }
+
+  private returnToSaves(): void {
+    this.saveActiveGame();
+    this.screenMode = 'saves';
+    this.offlineReport = null;
+    this.pendingDeleteSaveId = null;
+    this.refreshSaveList();
+    this.render();
+  }
+
+  private saveActiveGame(): void {
+    if (this.screenMode === 'game' && this.state.character) saveGame(this.state);
+  }
+
+  private scrollSaves(direction: number): void {
+    this.saveScrollIndex += direction;
+    this.clampSaveScroll();
+    this.render();
+  }
+
+  private clampSaveScroll(): void {
+    const maxScrollIndex = Math.max(0, this.saves.length - SAVES_VISIBLE_ITEMS);
+    this.saveScrollIndex = Phaser.Math.Clamp(this.saveScrollIndex, 0, maxScrollIndex);
+  }
+
+  private handleNameKey(event: KeyboardEvent): void {
+    if (this.screenMode !== 'new') return;
+    if (event.key === 'Backspace') {
+      this.newCharacterName = this.newCharacterName.slice(0, -1);
+      this.render();
+      return;
+    }
+    if (event.key === 'Enter') return;
+    if (event.key.length !== 1 || this.newCharacterName.length >= 20) return;
+    if (!/^[a-z0-9 _-]$/i.test(event.key)) return;
+    this.newCharacterName += event.key;
+    this.render();
+  }
+
   private sortedInventory(): EquipmentInstance[] {
     return [...this.state.inventory].sort((a, b) => Number(Object.values(this.state.equipment).includes(b.uid)) - Number(Object.values(this.state.equipment).includes(a.uid)) || b.foundAt - a.foundAt);
   }
@@ -996,6 +1163,18 @@ export class MainScene extends Phaser.Scene {
     const minutes = Math.floor((total % 3600) / 60);
     const secs = total % 60;
     return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m ${secs}s`;
+  }
+
+  private relativeTime(timestamp: number): string {
+    const elapsed = Math.max(0, Date.now() - timestamp);
+    const minutes = Math.floor(elapsed / 60000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days}d ago`;
+    return new Date(timestamp).toLocaleDateString();
   }
 }
 

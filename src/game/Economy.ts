@@ -2,6 +2,7 @@ import {
   ITEM_BY_ID,
   SKILL_BY_ID,
   type AttributeKey,
+  type CharacterState,
   type EquipmentInstance,
   type EquipmentSlot,
   type GameState,
@@ -51,6 +52,25 @@ export function getEquippedInstances(state: GameState): EquipmentInstance[] {
     .filter((instance): instance is EquipmentInstance => Boolean(instance));
 }
 
+function calculateAttackDamage(
+  character: CharacterState,
+  equipmentAttack: number,
+  skill: (id: string) => number,
+  activeBuffs: GameState['activeBuffs'],
+  lowHp: boolean
+): number {
+  const a = character.attributes;
+  const rangerAttackMultiplier = 1 + skill('eagle_eye') * 0.01 + skill('boss_mark') * 0.002;
+  const warCry = activeBuffs.war_cry ? 1 + 0.05 + skill('war_cry') * 0.015 : 1;
+  const attackMeal = activeBuffs.rare_feast ? 1.18 : activeBuffs.attack_meal ? 1.12 : 1;
+  const lastStandAttack = lowHp ? 1 + 0.05 + skill('last_stand') * 0.04 : 1;
+
+  const rangedDamage = a.dex * (character.classId === 'ranger' ? 1 : 0) * rangerAttackMultiplier;
+  const meleeDamage = a.str * (character.classId === 'warrior' ? 1 : 0) * warCry;
+
+  return Math.floor((12 + meleeDamage + rangedDamage + equipmentAttack) * attackMeal * lastStandAttack);
+}
+
 export function getDerivedStats(state: GameState): DerivedStats {
   const character = state.character;
   if (!character) {
@@ -71,10 +91,7 @@ export function getDerivedStats(state: GameState): DerivedStats {
   const baseMaxHp = 100 + character.level * 18 + a.vit * 14 + sum('maxHp');
   const lowHp = character.hp > 0 && character.hp < baseMaxHp * 0.3;
   const hpMultiplier = 1 + (skill('battle_endurance') > 0 ? 0.03 + skill('battle_endurance') * 0.02 : 0);
-  const rangerAttackMultiplier = 1 + skill('eagle_eye') * 0.01 + skill('boss_mark') * 0.002;
   const elementalStudy = 1 + skill('elemental_study') * 0.018;
-  const warCry = state.activeBuffs.war_cry ? 1 + 0.05 + skill('war_cry') * 0.015 : 1;
-  const attackMeal = state.activeBuffs.rare_feast ? 1.18 : state.activeBuffs.attack_meal ? 1.12 : 1;
   const magicTea = state.activeBuffs.rare_feast ? 1.18 : state.activeBuffs.magic_tea ? 1.12 : 1;
   const guardTonic = state.activeBuffs.rare_feast ? 1.12 : state.activeBuffs.guard_tonic ? 1.12 : 1;
   const focusedAim = state.activeBuffs.focused_aim ? skill('focused_aim') : 0;
@@ -82,12 +99,11 @@ export function getDerivedStats(state: GameState): DerivedStats {
   const quickStepSpeed = skill('quick_step') * 0.008;
   const windwalkSpeed = windwalk > 0 ? 0.05 + windwalk * 0.012 : 0;
   const swiftSpeed = state.activeBuffs.rare_feast ? 0.08 : state.activeBuffs.swift_juice ? 0.1 : 0;
-  const lastStandAttack = lowHp ? 1 + 0.05 + skill('last_stand') * 0.04 : 1;
 
   return {
     maxHp: Math.floor(baseMaxHp * hpMultiplier),
     maxSp: Math.floor(35 + character.level * 3 + a.int * 7 + sum('maxSp')),
-    attack: Math.floor((12 + character.level * 2.2 + a.str * 2.4 + a.dex * (character.classId === 'ranger' ? 1.7 : 0.35) + sum('attack')) * rangerAttackMultiplier * warCry * attackMeal * lastStandAttack),
+    attack: calculateAttackDamage(character, sum('attack'), skill, state.activeBuffs, lowHp),
     magicAttack: Math.floor((10 + character.level * 1.8 + a.int * 3.1 + a.dex * 0.45 + sum('magicAttack')) * elementalStudy * magicTea * (1 + skill('mvp_ward') * 0.002)),
     defense: Math.floor((character.level * 1.2 + a.vit * 2.2 + sum('defense') + (skill('iron_skin') > 0 ? (5 + skill('iron_skin') * 3) * (1 + Math.floor(a.vit / 10) * 0.02) : 0) + (hasShield ? skill('shield_guard') * 2 : 0)) * guardTonic),
     magicDefense: Math.floor(character.level + a.int * 1.35 + a.vit * 0.6 + sum('magicDefense') + skill('magic_barrier') * 0.8),
